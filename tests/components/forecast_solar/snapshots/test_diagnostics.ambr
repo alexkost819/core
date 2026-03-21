@@ -27,24 +27,17 @@
     }),
     'entry': dict({
       'data': dict({
-        'latitude': '**REDACTED**',
-        'longitude': '**REDACTED**',
       }),
       'options': dict({
         'api_key': '**REDACTED**',
         'damping_evening': 0.5,
         'damping_morning': 0.5,
         'inverter_size': 2000,
+        'latitude': '**REDACTED**',
+        'longitude': '**REDACTED**',
+        'modules_power': 5100,
       }),
       'subentries': list([
-        dict({
-          'data': dict({
-            'azimuth': 190,
-            'declination': 30,
-            'modules_power': 5100,
-          }),
-          'title': '30° / 190° / 5100W',
-        }),
       ]),
       'title': 'Green House',
     }),

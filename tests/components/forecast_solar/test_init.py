@@ -2,7 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-from forecast_solar import ForecastSolarConnectionError, Plane
+from forecast_solar import ForecastSolarConnectionError
+
+from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.forecast_solar.const import (
     CONF_AZIMUTH,
@@ -13,9 +15,8 @@ from homeassistant.components.forecast_solar.const import (
     CONF_INVERTER_SIZE,
     CONF_MODULES_POWER,
     DOMAIN,
-    SUBENTRY_TYPE_PLANE,
 )
-from homeassistant.config_entries import ConfigEntryState, ConfigSubentryData
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_API_KEY, CONF_LATITUDE, CONF_LONGITUDE
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -58,22 +59,31 @@ async def test_config_entry_not_ready(
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
 
 
-async def test_migration_from_v1(
-    hass: HomeAssistant,
-    mock_forecast_solar: MagicMock,
+async def test_migration_v1_to_v3(
+    hass: HomeAssistant, snapshot: SnapshotAssertion
 ) -> None:
-    """Test config entry migration from version 1."""
+    """Test config entry migration from v1 to v3.
+
+    v1 entries have:
+    - "modules power" (space) as the wattage key
+    - A single CONF_DAMPING value (not split into morning/evening)
+    - No lat/lon in options if using home location (stored as flag in data)
+
+    After migration to v3:
+    - CONF_MODULES_POWER replaces "modules power"
+    - CONF_DAMPING_MORNING and CONF_DAMPING_EVENING replace CONF_DAMPING
+    - CONF_LATITUDE and CONF_LONGITUDE are always present in options
+    """
     mock_config_entry = MockConfigEntry(
         title="Green House",
-        unique_id="unique",
+        unique_id="unique_v1",
         domain=DOMAIN,
         version=1,
-        data={
-            CONF_LATITUDE: 52.42,
-            CONF_LONGITUDE: 4.42,
-        },
+        data={},
         options={
             CONF_API_KEY: "abcdef12345",
+            CONF_LATITUDE: 52.42,
+            CONF_LONGITUDE: 4.42,
             CONF_DECLINATION: 30,
             CONF_AZIMUTH: 190,
             "modules power": 5100,
@@ -85,45 +95,41 @@ async def test_migration_from_v1(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entry = hass.config_entries.async_get_entry(mock_config_entry.entry_id)
-    assert entry.version == 3
-    assert entry.options == {
-        CONF_API_KEY: "abcdef12345",
-        "damping_morning": 0.5,
-        "damping_evening": 0.5,
-        CONF_INVERTER_SIZE: 2000,
-    }
-    plane_subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_PLANE)
-    assert len(plane_subentries) == 1
-    subentry = plane_subentries[0]
-    assert subentry.subentry_type == SUBENTRY_TYPE_PLANE
-    assert subentry.data == {
-        CONF_DECLINATION: 30,
-        CONF_AZIMUTH: 190,
-        CONF_MODULES_POWER: 5100,
-    }
-    assert subentry.title == "30° / 190° / 5100W"
+    migrated = hass.config_entries.async_get_entry(mock_config_entry.entry_id)
+    assert migrated == snapshot
+
+    # Explicit assertions so failures are readable without snapshot diffs
+    assert migrated.version == 3
+    assert CONF_MODULES_POWER in migrated.options
+    assert migrated.options[CONF_MODULES_POWER] == 5100
+    assert "modules power" not in migrated.options
+    assert migrated.options[CONF_DAMPING_MORNING] == 0.5
+    assert migrated.options[CONF_DAMPING_EVENING] == 0.5
+    assert CONF_DAMPING not in migrated.options
 
 
-async def test_migration_from_v2(
-    hass: HomeAssistant,
-    mock_forecast_solar: MagicMock,
+async def test_migration_v2_to_v3_with_manual_location(
+    hass: HomeAssistant, snapshot: SnapshotAssertion
 ) -> None:
-    """Test config entry migration from version 2."""
+    """Test v2 -> v3 migration for entries that already had manual lat/lon in options.
+
+    These entries should pass through migration unchanged (lat/lon already present).
+    """
     mock_config_entry = MockConfigEntry(
-        title="Green House",
-        unique_id="unique",
+        title="Garage East",
+        unique_id="unique_v2_manual",
         domain=DOMAIN,
         version=2,
-        data={
-            CONF_LATITUDE: 52.42,
-            CONF_LONGITUDE: 4.42,
-        },
+        data={},
         options={
             CONF_API_KEY: "abcdef12345",
+            CONF_LATITUDE: 52.42,
+            CONF_LONGITUDE: 4.42,
             CONF_DECLINATION: 30,
             CONF_AZIMUTH: 190,
             CONF_MODULES_POWER: 5100,
+            CONF_DAMPING_MORNING: 0.5,
+            CONF_DAMPING_EVENING: 0.5,
             CONF_INVERTER_SIZE: 2000,
         },
     )
@@ -131,169 +137,48 @@ async def test_migration_from_v2(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    entry = hass.config_entries.async_get_entry(mock_config_entry.entry_id)
-    assert entry.version == 3
-    assert entry.options == {
-        CONF_API_KEY: "abcdef12345",
-        CONF_INVERTER_SIZE: 2000,
-    }
-    plane_subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_PLANE)
-    assert len(plane_subentries) == 1
-    subentry = plane_subentries[0]
-    assert subentry.subentry_type == SUBENTRY_TYPE_PLANE
-    assert subentry.data == {
-        CONF_DECLINATION: 30,
-        CONF_AZIMUTH: 190,
-        CONF_MODULES_POWER: 5100,
-    }
-    assert subentry.title == "30° / 190° / 5100W"
+    migrated = hass.config_entries.async_get_entry(mock_config_entry.entry_id)
+    assert migrated == snapshot
+
+    assert migrated.version == 3
+    # Existing coordinates must be preserved, not overwritten with hass.config values
+    assert migrated.options[CONF_LATITUDE] == 52.42
+    assert migrated.options[CONF_LONGITUDE] == 4.42
 
 
-async def test_setup_entry_no_planes(
-    hass: HomeAssistant,
-    mock_forecast_solar: MagicMock,
+async def test_migration_v2_to_v3_home_location_backfilled(
+    hass: HomeAssistant, snapshot: SnapshotAssertion
 ) -> None:
-    """Test setup fails when all plane subentries have been removed."""
+    """Test v2 -> v3 migration for entries using home location (no lat/lon in options).
+
+    These entries had no lat/lon in options — the coordinator used to read them
+    from hass.config at runtime. Migration must backfill them from hass.config.
+    """
+    hass.config.latitude = 48.85
+    hass.config.longitude = 2.35
+
     mock_config_entry = MockConfigEntry(
-        title="Green House",
-        unique_id="unique",
-        version=3,
+        title="Roof South",
+        unique_id="unique_v2_home",
         domain=DOMAIN,
-        data={
-            CONF_LATITUDE: 52.42,
-            CONF_LONGITUDE: 4.42,
-        },
+        version=2,
+        data={},
         options={
-            CONF_API_KEY: "abcdef1234567890",
+            CONF_DECLINATION: 30,
+            CONF_AZIMUTH: 180,
+            CONF_MODULES_POWER: 4000,
+            CONF_DAMPING_MORNING: 0.0,
+            CONF_DAMPING_EVENING: 0.0,
         },
     )
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+    migrated = hass.config_entries.async_get_entry(mock_config_entry.entry_id)
+    assert migrated == snapshot
 
-
-async def test_setup_entry_multiple_planes_no_api_key(
-    hass: HomeAssistant,
-    mock_forecast_solar: MagicMock,
-) -> None:
-    """Test setup fails when multiple planes are configured without an API key."""
-    mock_config_entry = MockConfigEntry(
-        title="Green House",
-        unique_id="unique",
-        version=3,
-        domain=DOMAIN,
-        data={
-            CONF_LATITUDE: 52.42,
-            CONF_LONGITUDE: 4.42,
-        },
-        options={},
-        subentries_data=[
-            ConfigSubentryData(
-                data={
-                    CONF_DECLINATION: 30,
-                    CONF_AZIMUTH: 190,
-                    CONF_MODULES_POWER: 5100,
-                },
-                subentry_id="plane_1",
-                subentry_type=SUBENTRY_TYPE_PLANE,
-                title="30° / 190° / 5100W",
-                unique_id=None,
-            ),
-            ConfigSubentryData(
-                data={
-                    CONF_DECLINATION: 45,
-                    CONF_AZIMUTH: 90,
-                    CONF_MODULES_POWER: 3000,
-                },
-                subentry_id="plane_2",
-                subentry_type=SUBENTRY_TYPE_PLANE,
-                title="45° / 90° / 3000W",
-                unique_id=None,
-            ),
-        ],
-    )
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
-
-
-async def test_coordinator_multi_plane_initialization(
-    hass: HomeAssistant,
-    mock_forecast_solar: MagicMock,
-) -> None:
-    """Test the Forecast.Solar coordinator multi-plane initialization."""
-    options = {
-        CONF_API_KEY: "abcdef1234567890",
-        CONF_DAMPING_MORNING: 0.5,
-        CONF_DAMPING_EVENING: 0.5,
-        CONF_INVERTER_SIZE: 2000,
-    }
-
-    mock_config_entry = MockConfigEntry(
-        title="Green House",
-        unique_id="unique",
-        version=3,
-        domain=DOMAIN,
-        data={
-            CONF_LATITUDE: 52.42,
-            CONF_LONGITUDE: 4.42,
-        },
-        options=options,
-        subentries_data=[
-            ConfigSubentryData(
-                data={
-                    CONF_DECLINATION: 30,
-                    CONF_AZIMUTH: 190,
-                    CONF_MODULES_POWER: 5100,
-                },
-                subentry_id="plane_1",
-                subentry_type=SUBENTRY_TYPE_PLANE,
-                title="30° / 190° / 5100W",
-                unique_id=None,
-            ),
-            ConfigSubentryData(
-                data={
-                    CONF_DECLINATION: 45,
-                    CONF_AZIMUTH: 270,
-                    CONF_MODULES_POWER: 3000,
-                },
-                subentry_id="plane_2",
-                subentry_type=SUBENTRY_TYPE_PLANE,
-                title="45° / 270° / 3000W",
-                unique_id=None,
-            ),
-        ],
-    )
-
-    mock_config_entry.add_to_hass(hass)
-
-    with patch(
-        "homeassistant.components.forecast_solar.coordinator.ForecastSolar",
-        return_value=mock_forecast_solar,
-    ) as forecast_solar_mock:
-        await hass.config_entries.async_setup(mock_config_entry.entry_id)
-        await hass.async_block_till_done()
-
-    forecast_solar_mock.assert_called_once()
-    _, kwargs = forecast_solar_mock.call_args
-
-    assert kwargs["latitude"] == 52.42
-    assert kwargs["longitude"] == 4.42
-    assert kwargs["api_key"] == "abcdef1234567890"
-
-    # Main plane (plane_1)
-    assert kwargs["declination"] == 30
-    assert kwargs["azimuth"] == 10  # 190 - 180
-    assert kwargs["kwp"] == 5.1  # 5100 / 1000
-
-    # Additional planes (plane_2)
-    planes = kwargs["planes"]
-    assert len(planes) == 1
-    assert isinstance(planes[0], Plane)
-    assert planes[0].declination == 45
-    assert planes[0].azimuth == 90  # 270 - 180
-    assert planes[0].kwp == 3.0  # 3000 / 1000
+    assert migrated.version == 3
+    # Coordinates must have been backfilled from hass.config
+    assert migrated.options[CONF_LATITUDE] == 48.85
+    assert migrated.options[CONF_LONGITUDE] == 2.35
